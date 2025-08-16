@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ZIP Boundary Mapper — Multi‑Group</title>
+  <title>Local Group Map Generator</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <style>
     :root { --bg:#0b1020; --panel:#121a33; --muted:#8aa0c6; --accent:#7dd3fc; }
@@ -44,30 +44,31 @@
 </head>
 <body>
   <header>
-    <h1>ZIP Boundary Mapper — Multi‑Group</h1>
+    <h1>Local Group Map Generator</h1>
     <span class="pill">Data: Census ZCTA (2020)</span>
   </header>
   <div class="wrap">
     <aside class="panel">
       <div class="row" style="justify-content:space-between; align-items:center">
-        <div class="small">Add one card per group. Give it a label, color, and list of ZIPs.</div>
-        <button id="addGroup">+ Add group</button>
+        <div class="small">Add one card per local group. Give it a label, color, and list of ZIPs.</div>
+        <button id="addGroup">+ Add local group</button>
       </div>
       <div id="groups" style="display:flex; flex-direction:column; gap:12px"></div>
 
       <div class="row" style="margin-top:4px">
-        <button id="plot" class="primary">Show all groups</button>
+        <button id="plot" class="primary">Show on map</button>
         <button id="clear">Clear map</button>
         <button id="sample">Load sample</button>
       </div>
 
       <div class="row" style="margin-top:4px">
-        <button id="png">Download PNG</button>
+        <button id="png">Download image</button>
         <label class="toggle"><input id="basemapToggle" type="checkbox" checked> Use basemap</label>
+        <label class="toggle"><input id="labelsToggle" type="checkbox" checked> Show group labels</label>
       </div>
 
       <div class="notice small">
-        ZCTAs approximate USPS ZIP delivery areas. Good for mapping, not for legal boundaries. PNG export includes grayscale basemap, city labels, and your colored groups.
+        ZCTAs approximate USPS ZIP delivery areas. Good for mapping, not for legal boundaries.
       </div>
       <div class="footer">Tip: paste messy lists; the app normalizes to five‑digit ZIPs.</div>
     </aside>
@@ -83,6 +84,7 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script src="https://unpkg.com/leaflet-image/leaflet-image.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
   <script>
     // --- Config ---
     const CENSUS_ZCTA_LAYER = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/tigerWMS_ACS2022/MapServer/0"; // 2020 ZCTAs
@@ -194,14 +196,33 @@
     function groupStyle(g){ return { color: g.color, weight: 2, fill: true, fillColor: g.color, fillOpacity: g.opacity }; }
 
     function updateGroupLabelMarker(g){
+      // remove previous marker
       if (g.labelMarker){ map.removeLayer(g.labelMarker); g.labelMarker = null; }
       if (!g.layer || !g.label) return;
+      const labelsOn = document.getElementById('labelsToggle') ? document.getElementById('labelsToggle').checked : true;
+      if (!labelsOn) return;
+      // Try to place the label at an interior point of the colored area
+      try {
+        const gj = g.layer.toGeoJSON();
+        if (window.turf && gj){
+          const pt = turf.pointOnFeature(gj); // seeks a point guaranteed on the surface
+          if (pt && pt.geometry && pt.geometry.coordinates){
+            const [lng, lat] = pt.geometry.coordinates;
+            g.labelMarker = L.marker([lat, lng], { pane: 'labels', interactive:false, opacity:0 })
+              .bindTooltip(g.label, { permanent:true, direction:'center', className:'group-label' })
+              .addTo(map);
+            return;
+          }
+        }
+      } catch (e) { console.warn('Label interior point failed; using bounds center', e); }
+      // Fallback to bounds center
       const b = g.layer.getBounds(); if (!b.isValid()) return;
       const c = b.getCenter();
       g.labelMarker = L.marker([c.lat, c.lng], { pane: 'labels', interactive:false, opacity:0 })
         .bindTooltip(g.label, { permanent:true, direction:'center', className:'group-label' })
         .addTo(map);
     }
+
 
     async function plotAll(){
       let any = false; let bounds = null;
@@ -265,6 +286,17 @@
       if (e.target.checked){ tiles.addTo(map); labelsTiles.addTo(map); }
       else { map.removeLayer(tiles); map.removeLayer(labelsTiles); }
     };
+
+    // Toggle all group labels
+    const lblTgl = document.getElementById('labelsToggle');
+    if (lblTgl){
+      lblTgl.onchange = (e) => {
+        groups.forEach(g => {
+          if (g.labelMarker){ map.removeLayer(g.labelMarker); g.labelMarker = null; }
+          if (e.target.checked) updateGroupLabelMarker(g);
+        });
+      };
+    }
 
     // --- Export PNG with basemap & labels ---
     function downloadBlob(filename, blob) {
